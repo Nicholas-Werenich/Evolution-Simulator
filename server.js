@@ -1,61 +1,151 @@
+/**
+ * Evolater Backend Server
+ * Handles POST requests to generate evolved creature states using OpenAI text and image models.
+ * Integrates with Firebase Firestore for state storage.
+ * 
+ * TODO: Rate limiting, safeguards for innapropriate content and error handling for null image
+ */
+
 const express = require('express');
 const admin = require('firebase-admin');
+const fetch = require('node-fetch');
+
+//Access Keys
+const dotenv = require('dotenv');
+dotenv.config();
+
+//OpenAI API
+const OpenAI = require('openai');
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 //Firebase Admin SDK
-const privateKey = "-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQC+EA7F8pTh46+S\nbjDz0ZBJwkzc9JYEKICKd5vaTdKY+3pJKKKMkzZ0pgmTozKyXkaec3RLdLdWMxs9\ntuTX+ZBfk/hkrtFJ8KKJjHCG5v9VzdS9sxvzP0Yn4gOitUfkh+oH9VHaZ6QuTkci\nSsyGn9dMNcslFgzZ65HNhmm85C6d4estS4NJA4K651Pc3VxPT2tDFDdZirVrtoPF\n4uGlptMp5F8z0q5opVH32UkfkJQzjFQbj3n2UGXC99/lIxUI7YxrxgGnhxP9YLON\nAeQ/Zr7OELimvhRrg1wsnMAURjpTKm/P3v3AdhukZ2JKlf8fLYsD5yCfzGvRyEa5\nvo2uRochAgMBAAECggEAFUgqRVFASUpz0YlP5y9JMS8l6Oxkw2avHQIfZBqIeTuY\ngepgSC4gP//LDPpuTfF3Rh0OsbfKIydyFo8dEQ93cnJY0xpNolJE+vKsM3jYcLjN\naGfuumY0gnkA9/ZFTHJJGvbF4XcvN8WpWq5GOFFb2+NeocKWMg0aDInPW3iv/Rra\nb6HAvlay7GnOxKDLAQKKnu0t40dwyzd9AdQ3zhnrTm5XNZC/13uphACgis7UwJ/x\nFl+2T463P86HBnK5HJoLG2FqW8gKTHLDPk+D6wDCBegWfzwMplWjugbAiscMzkv2\nBF3E+yUgv+Ya8lXKKo7GJ8JVOF5r8WpivGQSKjl0yQKBgQDhm0xJ5YyJIFIoOdBi\nGcgDgPMAnyveu9PYqbQM5S1P6jgH3aac8oyEHd1Wvka6PgcBrLovMsUuG8tgy3kd\nQheb6zyyZ3GQNMrOLcxVgVf7WlyUCXODDxanHZ2FoypzGVfsSSLQOGDz3L3MCJvK\nCQXBX3vMOQadccFfIso1liOGOQKBgQDXquysi6HxvxT3OWqc9ZiU57Zbw619KXnx\nuDUbD3SXvp1vm1nK8RI03ae7ivwmxNYRu1s1o+XSHWGNysaTcK536UqMGtoiF7Gw\nOM4E8zC1zCRskjaxE115Mb5IbOSWSrFrLZxu8bKm+XYuLzfn70qHuKlokRVXj+ZR\nEXbxe4ZIKQKBgQChCzhz75ZYNGgxKsPjoz+xsJTGNtkcD7vzh4BtTBMCXtFMXB6Z\nHlLL5H2hdAYM4EYkHeZx1q4GcfTFzblQ92Le/BbByzG3nNfAQdUAnGnvlNtNGUoJ\nnfWvqWZOhODCdK7cjoB5XiVnLoWVZfe/Sp1/Iee/Kl3ced1tSepKQjhtkQKBgQCT\nWQxqttvmNw8z+d6FbqbY1ZcaCw81PGk8ZQajfmPCaVFXN2SZ6yrtQ6Od1s+ADWvU\noZUniNs0Oy6zmZ8ijRImixWLs6zlLhsQsz7O0visvNUF+L+1K+3pJ7tB8GQc6ttc\nxsTiZ/APdNDxrQEdTbg2EkxsTPOv53kMWkpRonuUQQKBgCZcY6PPi/sTXc5KqdrZ\ngPBaSZNKH9Ih4XxGbRg0d81v1ZtCS6vdxznoWAYL12C0hj5IC0PDW3mf3QIEhy92\ndrS3psoT1ZsNn3B4DZ5GGCMe+GRUvdSTwv17JoAsFMeVp9qfUADKlszlzOjqklYt\nnYemZBvMdCL29K1hTXxUvINE\n-----END PRIVATE KEY-----\n"
+const firebaseAdmin = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 admin.initializeApp({
-    credential: admin.credential.cert(privateKey)
+    credential: admin.credential.cert(firebaseAdmin),
 });
-
 const db = admin.firestore();
+
+//Frontend config
+const path = "/users/:userId/creatures/:creatureId/states/:randomId";
 const app = express();
-const port = process.env.PORT || 3000;
+const port = 3000;
 
 //API config
-const defualtEnvironment = "Fill in with specifics about earth";
+const defaultEnvironment = "Fill in with specifics about earth";
 const imagePromptAddon = "Dylans prompt";
 const textPromptAddon = "Dylans prompt";
 
-const creatureStages = 3;
-
-
+//Current minimum size accepted
+const imageResolution = "1024x1024";
+const creatureStages = 1;
 
 //Middleware
 app.use(express.json());
 
 //Endpoint for generating creature
-app.post('/process-data', async (req, res) => {
-    let { creatureDetails, creatureEnvironment, creatureImage } = req.body;
+app.post(path, async (req, res) => {
+
+
+    const { userId, creatureId, data } = req.body;
+    const { state, creatureImage, name, creatureDescription, creatureEnvironment } = data;
+
+    //Testing recieved data
+    console.log("Received POST data:");
+    console.log("userId:", userId);
+    console.log("creatureId:", creatureId);
+    console.log("data:", data);
 
     try {
-        //Create session with OpenAI
 
-        //Check if enviroment is defualt
-        creatureEnvironment ??= defualtEnvironment;
+        //Check if environment is null
+        creatureEnvironment ??= defaultEnvironment;
 
+        const creatureRef = db
+            .collection('users')
+            .doc(userId)
+            .collection('creatures')
+            .doc(creatureId);
 
         for (let i = 0; i < creatureStages; i++) {
-            ({ creatureDetails, creatureEnvironment, creatureImage }) = CreatureOutput(creatureDetails, creatureEnvironment, creatureImage);
-            //Store current stage into firestore
+            const newCreature = await CreatureOutput(creatureDescription, creatureImage, creatureEnvironment);
+
+
+            /*
+            Commented out due to testing, don't want to interfere with the database
+
+            const newState = {
+                dateAdded: new Date(),
+                image: newCreature.image,
+                state: i,
+                changes: newCreature.creatureDescription,
+            };
+
+            await creatureRef.collection('states').add(newState);
+            */
+
+
+            //Testing OpenAI output
+            console.log(newCreature.creatureDescription);
+            console.log(newCreature.image);
+
+            //Update for next iteration
+            ({ creatureDescription, creatureImage } = newCreature);
         }
 
-
-
-
-        res.status(200).json({ message: 'Data processed successfully' });  // Placeholder success response
+        res.status(200).json({ message: 'Data processed successfully' });
     } catch (error) {
         console.error('Error processing data:', error);
-        res.status(500).json({ error: 'Failed to process data' });  // Error response if anything goes wrong
+        res.status(500).json({ error: 'Failed to process data' });
     }
 });
 
-async function CreatureOutput(creatureDetails, creatureEnvironment, creatureImage) {
+//Take in image and text prompts to generate the next evolutionary state of the creature
+async function CreatureOutput(creatureDescription, creatureImage, creatureEnvironment) {
 
-    //Call 4o mini api for text generation for what changed part and definition, use what changed for image and text, use definition for next input
+    //Text generation
+    const textResponse = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [
+            { role: "user", content: `${textPromptAddon} \n ${creatureDescription} \n The environment of the creature is: \n ${creatureEnvironment}` }
+        ]
+    });
+
+    //Image generation
+    const textData = textResponse.choices[0].message.content
+
+    const imgResponse = await openai.images.generate({
+        model: "gpt-image-1",
+        prompt: `${imagePromptAddon} \n ${creatureImage} \n ${textData}`,
+        n: 1,
+        size: imageResolution,
+    });
 
 
-    //Call Image Generation API for image
+    /*Test image due to expensive API calls
+    const imgResponse = {
+        data: [
+            {
+                url: "https://na.rdcpix.com/8521745db8e94d6b8320a7809d0d3e4dw-c1075410791srd-w928_q80.jpg"
+            }
+        ]
+    };
+    */
 
+    //Convert image to base64 to store in database
+    const imgData = await UrlToBase64(imgResponse.data[0].url);
+
+    return {
+        creatureDescription: textData,
+        image: imgData
+    };
+}
+
+//Fetch image URL and convert to base64
+async function UrlToBase64(imageUrl) {
+    const response = await fetch(imageUrl);
+    const buffer = await response.buffer();
+    const base64 = buffer.toString('base64');
+    return base64;
 }
 
 //Server start
