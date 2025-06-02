@@ -109,9 +109,9 @@ app.post("/add-creature", async (req, res) => {
                 options: [
                     "Yes",
                     "No"
-                ]
+                ],
+                title: choices[0],
             },
-            title: choices[0],
             dateAdded: new Date(),
             image: `data:image/png;base64,${shrunkImg}`,
             state: state + 1
@@ -180,9 +180,9 @@ app.post("/evolve-creature", async (req, res) => {
                 options: [
                     "Yes",
                     "No"
-                ]
+                ],
+                title: choices[0],
             },
-            title: choices[0],
             dateAdded: new Date(),
             image: `data:image/png;base64,${newCreature.image}`,
             state: state + 1
