@@ -37,8 +37,8 @@ const db = admin.firestore();
 //Prompts
 const defaultEnvironment = "Earth";
 const imagePromptAddon = "You are a 3D artist specializing in low-poly PS2-era game graphics. Create a creature inspired by a child's simple drawing. The model should have: PS2 - era polygon count(simple geometry, low detail) A single soft color with slight tonal variation Smooth hard - edged surfaces, no high - resolution textures Anatomically believable but exaggerated cartoon - like proportions. Standing in a neutral pose on a plain, empty background. Simple lighting that softly highlights the polygon edges. Describe the result in a way that matches this style.";
-const textPromptAddon = "Addon features to this creature by 'evolving' it. The following line is an event that caused the creature to evolve, ";
-const choicePrompt = "Create a senario where the creature has a senario to do something. Make it a general senario and dont address the creature directly. It should be a yes no senario, one resulting in an evolutionary advantage and the other resulting in the extinction but not obvious which one is which. The response should be formatted: 'Senario: [Description of senario] \n [What happens if creature survives] \n [What happens if creature goes extinct]'. The descriptions should be concise and easy to understand, suitable for a child. This means that there should be 3 lines max";
+const textPromptAddon = "Addon features to this creature by 'evolving' it. The response should be a short paragraph of the creatures evolved features";
+const choicePrompt = "Create a senario where the creature has a senario to do something. Make it a general senario and dont address the creature directly. It should be a yes/no senario, one resulting in an evolutionary advantage and the other resulting in the extinction but not obvious which one is which. The response should be formatted: 'Senario: [Description of senario] \n [What happens if creature survives] \n [What happens if creature goes extinct]'. The descriptions should be concise and easy to understand, suitable for a child. This means that there should be 3 lines max";
 
 //Current minimum size accepted
 const imageResolution = "1024x1024";
@@ -113,7 +113,7 @@ app.post("/add-creature", async (req, res) => {
             },
             title: choices[0],
             dateAdded: new Date(),
-            image: shrunkImg,
+            image: `data:image/png;base64,${shrunkImg}`,
             state: state + 1
         };
 
@@ -184,7 +184,7 @@ app.post("/evolve-creature", async (req, res) => {
             },
             title: choices[0],
             dateAdded: new Date(),
-            image: newCreature.image,
+            image: `data:image/png;base64,${newCreature.image}`,
             state: state + 1
         };
 
@@ -222,7 +222,7 @@ async function NewCreatureState(creatureImage, evolutionTrigger) {
     const imgData = await ShrinkImage(imgResponse);
 
     //Save base64 image to text file for verification
-    await SaveBase64FileTesting(imgData, `generatedImages/creature16.txt`, (err) => {
+    await SaveBase64FileTesting(imgData, `generatedImages/creature17.txt`, (err) => {
         console.log("Error: " + err);
     });
 
