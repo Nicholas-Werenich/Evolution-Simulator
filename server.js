@@ -163,7 +163,7 @@ app.post("/evolve-creature", async (req, res) => {
         }
 
 
-        const newCreature = await NewCreatureState(creatureImage, evolutionTrigger);
+        const newCreature = await NewCreatureState(creatureImage.split(",", 1)[1], evolutionTrigger);
 
         const choicesString = await TextGenerator(choicePrompt);
         console.log("Choices: ", choicesString);
