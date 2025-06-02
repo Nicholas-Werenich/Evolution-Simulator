@@ -134,13 +134,14 @@ app.post("/evolve-creature", async (req, res) => {
     const { userId, creatureId, data, choice } = req.body;
     const { state: state, image: creatureImage, title: extinctionEvent, choice: choices } = data;
 
-    const changes = choices.changes[2];
+    const changes = choices.changes[choice];
 
     const evolutionTrigger = `The creature evolved to survive ${extinctionEvent} by changing like this: ${changes}`;
 
     //Testing recieved data
     console.log("Received POST data:");
     console.log("creatureId:", creatureId);
+    console.log("Choice:", choice);
     console.log("data:", data);
 
     try {
@@ -157,6 +158,7 @@ app.post("/evolve-creature", async (req, res) => {
 
         if (choice == 1) {
             await ExtinctCreature(creatureRef, extinctionEvent);
+            res.status(200).json({ message: 'Data processed successfully' });
             return;
         }
 
@@ -331,7 +333,7 @@ async function SaveCreatureState(creatureRef, newState) {
 
 async function ExtinctCreature(creatureRef, extinctionEvent) {
 
-    const deathTagline = TextGenerator(`A creature has gone extinct due to ${extinctionEvent}. In a short one line tagline  state how it lost. Example: "The creature was unable to adapt to the changing environment and died out."`);
+    const deathTagline = TextGenerator(`A creature has gone extinct due to ${extinctionEvent}. In a short one line tagline  state how it lost. Example: 'The creature was unable to adapt to the changing environment and died out.'`);
     const newState = {
         changes: deathTagline,
         state: state + 1
