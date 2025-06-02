@@ -60,6 +60,11 @@ app.use(limiter);
 //Size limit set for 50mb to allowe for base64 images
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb' }));
+app.use(express.static(path.join(__dirname, 'public')));
+
+app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
 
 //Add creature endpoint
 app.post("/add-creature", async (req, res) => {
