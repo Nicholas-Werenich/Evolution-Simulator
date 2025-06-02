@@ -68,7 +68,7 @@ app.use(cors());
 app.post("/add-creature", async (req, res) => {
 
     const { userId, creatureId, data } = req.body;
-    const { state: state, name: name, image: creatureImage, description: creatureDescription } = data;
+    const { state: state, name: name, img: creatureImage, description: creatureDescription } = data;
 
     console.log("Received POST data:");
     console.log("creatureId:", creatureId);
