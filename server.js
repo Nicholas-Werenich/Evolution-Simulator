@@ -13,6 +13,7 @@ const fetch = (...args) => import('node-fetch').then(mod => mod.default(...args)
 const sharp = require('sharp');
 const path = require('path');
 const { toFile } = require("openai");
+const cors = require('cors');
 
 //Access Keys
 const dotenv = require('dotenv');
@@ -60,7 +61,10 @@ app.use(limiter);
 //Size limit set for 50mb to allowe for base64 images
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb' }));
-app.use(express.static(path.join(__dirname, 'public')));
+
+app.use(cors({
+    origin: 'https://daniel-sheptycki.github.io/',
+}));
 
 //Add creature endpoint
 app.post("/add-creature", async (req, res) => {
