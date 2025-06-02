@@ -3,21 +3,27 @@
  * Handles POST requests to generate evolved creature states using OpenAI text and image models.
  * Integrates with Firebase Firestore for state storage.
  * 
- * TODO: Rate limiting, safeguards for innapropriate content and error handling for null image
+ * TODO: safeguards for innapropriate content and error handling for null image, timeouts for image generation
  */
 const fs = require('fs');
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const admin = require('firebase-admin');
-const fetch = require('node-fetch');
+const fetch = (...args) => import('node-fetch').then(mod => mod.default(...args));
+const sharp = require('sharp');
+const path = require('path');
+const { toFile } = require("openai");
 
 //Access Keys
 const dotenv = require('dotenv');
 dotenv.config();
 
+//Imgur API
+const clientID = process.env.IMGUR_CLIENT_ID;
+
 //OpenAI API
 const OpenAI = require('openai');
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const apiKey = process.env.OPENAI_API_KEY;
 
 //Firebase Admin SDK
 const firebaseAdmin = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
@@ -27,138 +33,193 @@ admin.initializeApp({
 
 const db = admin.firestore();
 
-//Frontend config
-const path = "/users/:userId/creatures/:creatureId/states/:randomId";
-const app = express();
-const port = 3000;
-
-//API config
-const defaultEnvironment = "Fill in with specifics about earth";
-const imagePromptAddon = "Dylans prompt";
-const textPromptAddon = "Dylans prompt";
+//Prompts
+const defaultEnvironment = "Earth";
+const imagePromptAddon = "You are a 3D artist specializing in low-poly PS2-era game graphics. Create a creature inspired by a child's simple drawing. The model should have: PS2 - era polygon count(simple geometry, low detail) A single soft color with slight tonal variation Smooth hard - edged surfaces, no high - resolution textures Anatomically believable but exaggerated cartoon - like proportions. Standing in a neutral pose on a plain, empty background. Simple lighting that softly highlights the polygon edges. Describe the result in a way that matches this style.";
+const textPromptAddon = "Addon features to this creature by 'evolving' it. The following line is an event that caused the creature to evolve, ";
+const choicePrompt = "Create a senario where the creature has a senario to do something. Make it a general senario and dont address the creature directly. It should be a yes no senario, one resulting in an evolutionary advantage and the other resulting in the extinction but not obvious which one is which. The response should be formatted: 'Senario: [Description of senario] \n [What happens if creature survives] \n [What happens if creature goes extinct]'. The descriptions should be concise and easy to understand, suitable for a child. This means that there should be 3 lines max";
 
 //Current minimum size accepted
 const imageResolution = "1024x1024";
-const creatureStages = 1;
 
-//Middleware
-app.use(express.json());
 
-//Endpoint for generating creature
-app.post(path, async (req, res) => {
+//Frontend config
+const app = express();
+const port = process.env.PORT || 3000;
 
+//Rate limiting
+const limiter = rateLimit({
+    //8 requests per minute
+    windowMs: 60 * 1000,
+    max: 8,
+    message: { error: "Too many requests, slow down." }
+});
+
+app.use(limiter);
+//Express middleware
+//Size limit set for 50mb to allowe for base64 images
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb' }));
+
+//Add creature endpoint
+app.post("/add-creature", async (req, res) => {
 
     const { userId, creatureId, data } = req.body;
-    const { state, creatureImage, name, creatureDescription, creatureEnvironment } = data;
+    const { state: state, name: name, image: creatureImage, description: creatureDescription } = data;
 
-    //Testing recieved data
     console.log("Received POST data:");
-    // console.log("userId:", userId);
     console.log("creatureId:", creatureId);
     console.log("data:", data);
 
     try {
 
-        //Check if environment is null
-        creatureEnvironment ??= defaultEnvironment;
+        const imgResponse = await GenerateImage(`${imagePromptAddon} \n ${creatureDescription}`, creatureImage);
 
-        /*
+        //Shrink image
+        const shrunkImg = await ShrinkImage(imgResponse);
+
+
+        const choicesString = await TextGenerator(choicePrompt);
+        console.log(choicesString);
+        const choices = choicesString.split('\n').filter(l => l.trim() !== '');
+
+        await SaveBase64FileTesting(shrunkImg, `generatedImages/creature15.txt`, (err) => {
+            console.log("Error: " + err);
+        });
+
+
+
+        //Save to firebase
         const creatureRef = db
             .collection('users')
             .doc(userId)
             .collection('creatures')
             .doc(creatureId);
 
-        */
+        const newState = {
+            changes: `Here is your own creature come alive! ${name} is the newest kid on the block.`,
+            choice: {
+                changes: [
+                    choices[1],
+                    choices[2]
+                ],
+                options: [
+                    "Yes",
+                    "No"
+                ]
+            },
+            title: choices[0],
+            dateAdded: new Date(),
+            image: shrunkImg,
+            state: state + 1
+        };
 
-        for (let i = 0; i < creatureStages; i++) {
-            const newCreature = await CreatureOutput(creatureDescription, creatureImage, creatureEnvironment);
-
-
-            /*
-            Commented out due to testing, don't want to interfere with the database
-
-            const newState = {
-                dateAdded: new Date(),
-                image: newCreature.image,
-                state: i,
-                changes: newCreature.creatureDescription,
-            };
-
-            await creatureRef.collection('states').add(newState);
-            */
-
-
-            //Testing OpenAI output
-            console.log(newCreature.creatureDescription);
-            //console.log(newCreature.image);
-
-            //Update for next iteration
-            //({ creatureDescription, creatureImage } = newCreature);
-        }
+        await SaveCreatureState(creatureRef, newState);
 
         res.status(200).json({ message: 'Data processed successfully' });
-    } catch (error) {
+    }
+    catch (error) {
+        console.error('Error processing data:', error);
+        res.status(500).json({ error: 'Failed to process data' });
+    }
+})
+
+//Evolve createure endpoint
+app.post("/evolve-creature", async (req, res) => {
+
+
+    const { userId, creatureId, data, choice } = req.body;
+    const { state: state, image: creatureImage, title: extinctionEvent, choice: choices } = data;
+
+    const changes = choices.changes[2];
+
+    const evolutionTrigger = `The creature evolved to survive ${extinctionEvent} by changing like this: ${changes}`;
+
+    //Testing recieved data
+    console.log("Received POST data:");
+    console.log("creatureId:", creatureId);
+    console.log("data:", data);
+
+    try {
+
+        //Check if environment is null
+        //creatureEnvironment ??= defaultEnvironment;
+
+        const creatureRef = db
+            .collection('users')
+            .doc(userId)
+            .collection('creatures')
+            .doc(creatureId);
+
+
+        if (choice == 1) {
+            await ExtinctCreature(creatureRef, extinctionEvent);
+            return;
+        }
+
+
+        const newCreature = await NewCreatureState(creatureImage, evolutionTrigger);
+
+        const choicesString = await TextGenerator(choicePrompt);
+        console.log("Choices: ", choicesString);
+        const choices = choicesString.split('\n').filter(l => l.trim() !== '');
+
+        console.log(newCreature.creatureDescription);
+
+        const newState = {
+            changes: newCreature.creatureDescription,
+            choice: {
+                changes: [
+                    choices[1],
+                    choices[2]
+                ],
+                extinct: 1,
+                options: [
+                    "Yes",
+                    "No"
+                ]
+            },
+            title: choices[0],
+            dateAdded: new Date(),
+            image: newCreature.image,
+            state: state + 1
+        };
+
+        await SaveCreatureState(creatureRef, newState);
+
+
+        res.status(200).json({ message: 'Data processed successfully' });
+    }
+    catch (error) {
         console.error('Error processing data:', error);
         res.status(500).json({ error: 'Failed to process data' });
     }
 });
 
 //Take in image and text prompts to generate the next evolutionary state of the creature
-async function CreatureOutput(creatureDescription, creatureImage, creatureEnvironment) {
+async function NewCreatureState(creatureImage, evolutionTrigger) {
 
-    //Text generation
-    // const textResponse = await openai.chat.completions.create({
-    //     model: "gpt-4.1-nano",
-    //     messages: [
-    //         //{ role: "user", content: `${textPromptAddon} \n ${creatureDescription} \n The environment of the creature is: \n ${creatureEnvironment}` }
-    //         //{ role: "user", content: `Describe the image: ${imgData}` }
-    //         {
-    //             role: "user",
-    //             content: [
-    //                 {
-    //                     "type": "text",
-    //                     "text": "What’s in this image?"
-    //                 },
-    //                 {
-    //                     "type": "image_url",
-    //                     "image_url": {
-    //                         "url": `data:image/png;base64,${imgData}`
-    //                     }
-    //                 }
-    //             ]
-    //         }]
-    // });
+    //Upload image to Imgur
+    const imgURL = await UploadToImgur(creatureImage);
 
-    //const textData = textResponse.choices[0].message.content
+    //Creature evolution text
+    const textData = await TextGenerator(`${textPromptAddon} \n ${evolutionTrigger}`, imgURL.url);
+    console.log("Text response: ", textData);
 
-    /*
-    //Test image due to expensive API calls
-    const imgResponse = {
-        data: [
-            {
-                url: "https://na.rdcpix.com/8521745db8e94d6b8320a7809d0d3e4dw-c1075410791srd-w928_q80.jpg"
-            }
-        ]
-    };
-    */
+    //The text prompt for image generation
+    const imgPrompt = `${imagePromptAddon} \n ${textData}`;
 
-    // const imgResponse = await openai.images.generate({
-    //     model: "gpt-image-1",
-    //     prompt: "Create a picture of some bodacious low poly aliens cracking each other",
-    //     //prompt: `${imagePromptAddon} \n ${creatureImage} \n ${textData}`,
-    //     n: 1,
-    //     size: imageResolution,
-    // });
+    //Generate image using text prompt and base64 reference image
+    const imgResponse = await GenerateImage(imgPrompt, creatureImage);
 
+    //Delete the image from Imgur
+    console.log(await DeleteFromImgur(imgURL.deleteHash));
 
-    const imgResponse = await GenerateImage("creatureImage");
+    //Shrink image from 1024x1024 to 512x512 
+    const imgData = await ShrinkImage(imgResponse);
 
-    console.log(imgResponse.data[0].url);
-
-    const base64image = await convertImageUrlToBase64(imgResponse.data[0].url);
-
-    await SaveBase64FileTesting(base64image, "generatedImages/", (err) => {
+    //Save base64 image to text file for verification
+    await SaveBase64FileTesting(imgData, `generatedImages/creature16.txt`, (err) => {
         console.log("Error: " + err);
     });
 
@@ -168,18 +229,158 @@ async function CreatureOutput(creatureDescription, creatureImage, creatureEnviro
     };
 }
 
-async function convertImageUrlToBase64(imageUrl) {
+async function TextGenerator(prompt, img = null) {
+
+    if (img) {
+        const textResponse = await openai.chat.completions.create({
+            model: "gpt-4.1-nano",
+            messages: [
+                {
+                    role: "user",
+                    content: [
+                        {
+                            type: "image_url",
+                            image_url: {
+                                url: img
+                            }
+                        },
+                        {
+                            type: "text",
+                            text: prompt
+                        }
+                    ]
+                }
+            ],
+        });
+        return textResponse.choices[0].message.content;
+    }
+    else {
+        const textResponse = await openai.chat.completions.create({
+            model: "gpt-4.1-nano",
+            messages: [
+                {
+                    role: "user",
+                    content: [
+                        {
+                            type: "text",
+                            text: prompt
+                        }
+                    ]
+                }
+            ],
+        });
+        return textResponse.choices[0].message.content;
+    }
+}
+
+
+async function GenerateImage(prompt, base64String) {
+
+    //Remove the base64 prefix
+    const buffer = Buffer.from(base64String, 'base64');
+
+    const imgObject = await toFile(buffer, "image.png", {
+        type: "image/png",
+    });
+
+    const response = await openai.images.edit({
+        model: "gpt-image-1",
+        quality: "low",
+        background: "transparent",
+        size: imageResolution,
+        image: imgObject,
+        prompt,
+    });
+
+    return response.data[0].b64_json;
+}
+
+async function ShrinkImage(image) {
     try {
 
-        const response = await fetch(imageUrl);
-        const buffer = await response.buffer();
-        const base64String = buffer.toString('base64');
+        const buffer = Buffer.from(image, 'base64');
 
-        return `data:image/png;base64,${base64String}`;
+        //Change to 512x512 to keep dimensions but shrink file size
+        const resizedBuffer = await sharp(buffer)
+            .resize(512, 512)
+            .png()
+            .toBuffer();
 
+        //Add base64 image prefix
+        return resizedBuffer.toString('base64');
     } catch (error) {
-        console.error("Error converting image URL to base64:", error);
+        console.error('Error:', error);
     }
+}
+
+
+async function SaveCreatureState(creatureRef, newState) {
+
+    try {
+        await creatureRef.collection('states').add(newState);
+        console.log('Creature state saved successfully:', newState.state);
+    }
+    catch (error) {
+        console.error('Error saving creature state:', error);
+        throw new Error('Failed to save creature state');
+    }
+}
+
+async function ExtinctCreature(creatureRef, extinctionEvent) {
+
+    const deathTagline = TextGenerator(`A creature has gone extinct due to ${extinctionEvent}. In a short one line tagline  state how it lost. Example: "The creature was unable to adapt to the changing environment and died out."`);
+    const newState = {
+        changes: deathTagline,
+        state: state + 1
+    };
+    try {
+        await creatureRef.collection('states').add(newState);
+        console.log('Creature state saved successfully:', newState.state);
+    }
+    catch (error) {
+        console.error('Error saving creature state:', error);
+        throw new Error('Failed to save creature state');
+    }
+}
+
+async function UploadToImgur(base64Image) {
+    const response = await fetch('https://api.imgur.com/3/image', {
+        method: 'POST',
+        headers: {
+            Authorization: `Client-ID ${clientID}`,
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            image: base64Image,
+            type: 'base64',
+        }),
+    });
+
+    const result = await response.json();
+
+    if (!result.success) {
+        console.error(result);
+        throw new Error('Failed to upload to Imgur');
+    }
+
+    console.log('Imgur URL:', result.data.link);
+
+    return {
+        url: result.data.link,
+        deleteHash: result.data.deletehash
+    };
+}
+
+async function DeleteFromImgur(deleteHash) {
+    const response = await fetch(`https://api.imgur.com/3/image/${deleteHash}`, {
+        method: 'DELETE',
+        headers: {
+            Authorization: `Client-ID ${clientID}`
+        }
+    });
+
+    const result = await response.json();
+    console.log(result);
 }
 
 async function SaveBase64FileTesting(content, filePath) {
@@ -187,28 +388,6 @@ async function SaveBase64FileTesting(content, filePath) {
         console.log('Saved to: ', filePath);
     });
 }
-
-async function GenerateImage(prompt) {
-
-
-    const response = await fetch('https://api.openai.com/v1/images/generations', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-            prompt: prompt,
-            n: 1,
-            size: size,
-        }),
-    });
-
-    const data = await response.json();
-    return data.data[0].url;
-}
-
-
 //Server start
 app.listen(port, () => {
     console.log(`Server is running on port ${port}`);
