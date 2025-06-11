@@ -24,6 +24,7 @@ const clientID = process.env.IMGUR_CLIENT_ID;
 
 //OpenAI API
 const OpenAI = require('openai');
+const { create } = require('domain');
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 //Firebase Admin SDK
@@ -38,7 +39,7 @@ const db = admin.firestore();
 const defaultEnvironment = "Earth";
 const imagePromptAddon = "You are a 3D artist specializing in low-poly PS2-era game graphics. Create a creature inspired by a child's simple drawing. The model should have: PS2 - era polygon count(simple geometry, low detail) A single soft color with slight tonal variation Smooth hard - edged surfaces, no high - resolution textures Anatomically believable but exaggerated cartoon - like proportions. Standing in a neutral pose on a plain, empty background. Simple lighting that softly highlights the polygon edges. Describe the result in a way that matches this style.";
 const textPromptAddon = "Addon features to this creature by 'evolving' it. The response should be a short paragraph of the creatures evolved features";
-const choicePrompt = "Create a senario where the creature has a senario to do something. Make it a general senario and dont address the creature directly. It should be a yes/no senario, one resulting in an evolutionary advantage and the other resulting in the extinction but not obvious which one is which. The response should be formatted: 'Senario: [Description of senario] \n [What happens if creature survives] \n [What happens if creature goes extinct]'. The descriptions should be concise and easy to understand, suitable for a child. This means that there should be 3 lines max";
+const choicePrompt = "Create a scenario where a creature is faced with a yes/no decision. The scenario should be general and not mention the creature directly. The outcome of each choice should be ambiguous, with one leading to an evolutionary advantage and the other to extinction, but it should not be clear which is which. It should also be fairly unspecific so many creatures can fit the senario. The format must be exactly: \nScenario: [Short description of the situation]\nYes: [Action taken if yes]\nNo: [Action taken if no]";
 
 //Current minimum size accepted
 const imageResolution = "1024x1024";
@@ -163,7 +164,7 @@ app.post("/evolve-creature", async (req, res) => {
         }
 
 
-        const newCreature = await NewCreatureState(creatureImage.split(",", 1)[1], evolutionTrigger);
+        const newCreature = await NewCreatureState(creatureImage, evolutionTrigger);
 
         const choicesString = await TextGenerator(choicePrompt);
         console.log("Choices: ", choicesString);
@@ -205,10 +206,11 @@ app.post("/evolve-creature", async (req, res) => {
 async function NewCreatureState(creatureImage, evolutionTrigger) {
 
     //Upload image to Imgur
-    const imgURL = await UploadToImgur(creatureImage);
+    //const imgURL = await UploadToImgur(creatureImage);
 
     //Creature evolution text
-    const textData = await TextGenerator(`${textPromptAddon} \n ${evolutionTrigger}`, imgURL.url);
+    const textData = await TextGenerator(`${textPromptAddon} \n ${evolutionTrigger}`, creatureImage);
+    // const textData = await TextGenerator(`${textPromptAddon} \n ${evolutionTrigger}`, imgURL.url);
     console.log("Text response: ", textData);
 
     //The text prompt for image generation
@@ -218,7 +220,7 @@ async function NewCreatureState(creatureImage, evolutionTrigger) {
     const imgResponse = await GenerateImage(imgPrompt, creatureImage);
 
     //Delete the image from Imgur
-    console.log(await DeleteFromImgur(imgURL.deleteHash));
+    //console.log(await DeleteFromImgur(imgURL.deleteHash));
 
     //Shrink image from 1024x1024 to 512x512 
     const imgData = await ShrinkImage(imgResponse);
@@ -234,9 +236,9 @@ async function NewCreatureState(creatureImage, evolutionTrigger) {
     };
 }
 
-async function TextGenerator(prompt, img = null) {
+async function TextGenerator(prompt, base64 = null) {
 
-    if (img) {
+    if (base64) {
         const textResponse = await openai.chat.completions.create({
             model: "gpt-4.1-nano",
             messages: [
@@ -246,7 +248,7 @@ async function TextGenerator(prompt, img = null) {
                         {
                             type: "image_url",
                             image_url: {
-                                url: img
+                                url: base64
                             }
                         },
                         {
@@ -282,7 +284,9 @@ async function TextGenerator(prompt, img = null) {
 async function GenerateImage(prompt, base64String) {
 
     //Remove the base64 prefix
-    const buffer = Buffer.from(base64String, 'base64');
+    const base64 = base64String.replace(/^data:image\/\w+;base64,/, "");
+
+    const buffer = Buffer.from(base64, 'base64');
 
     const imgObject = await toFile(buffer, "image.png", {
         type: "image/png",
